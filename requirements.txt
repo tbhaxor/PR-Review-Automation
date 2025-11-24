@@ -7,6 +7,9 @@ click==8.3.1 ; python_version >= "3.14" \
 colorama==0.4.6 ; python_version >= "3.14" and platform_system == "Windows" \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+flask-sitemap==0.4.0 ; python_version >= "3.14" \
+    --hash=sha256:a59f726e889a1c7a71c6d0980fb62c2a9f382c73391567e00f8af892bb4ec731 \
+    --hash=sha256:bafdcca1fc321aafb8c086a8bd260591df29c521032001533327825acff976b8
 flask==3.1.2 ; python_version >= "3.14" \
     --hash=sha256:bf656c15c80190ed628ad08cdfd3aaa35beb087855e2f494910aa3774cc4fd87 \
     --hash=sha256:ca1d8112ec8a6158cc29ea4858963350011b5c846a414cdb7a954aa9e967d03c

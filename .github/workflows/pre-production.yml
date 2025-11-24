@@ -1,0 +1,124 @@
+name: Pre-Production Deployment
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed, reopened]
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+  pull-requests: 'write'
+
+jobs:
+  build-and-push-pr-image:
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened')
+    name: Build and Push PR Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        name: Checkout Repository
+      - name: Authenticate to GCP using WIF
+        uses: google-github-actions/auth@v3 
+        id: google-wif-auth
+        with:
+          token_format: "access_token"
+          create_credentials_file: true
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Login to GAR
+        uses: docker/login-action@v3
+        with:
+          registry: "${{ vars.REGION }}-docker.pkg.dev"
+          username: oauth2accesstoken
+          password: ${{ steps.google-wif-auth.outputs.access_token }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker Metadata
+        uses: docker/metadata-action@v5
+        id: docker-metadata
+        with:
+          images: "${{ vars.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.ARTIFACT_REGISTRY_NAME }}/${{ secrets.DOCKER_IMAGE_NAME }}"
+          tags: |
+            type=ref,event=pr
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ${{ steps.docker-metadata.outputs.tags }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          annotations:  ${{ steps.docker-metadata.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+  deploy-pr-image:
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened')
+    name: Deploy PR Image
+    runs-on: ubuntu-latest
+    needs: [build-and-push-pr-image]
+    environment:
+      name: Pre-Production
+      url: "https://pr-${{ github.event.pull_request.number }}.${{ vars.BASE_DOMAIN_NAME }}"
+    steps:
+      - uses: actions/checkout@v5
+        name: Checkout Repository
+      - name: Authenticate to GCP using WIF
+        uses: google-github-actions/auth@v3
+        id: google-wif-auth
+        with:
+          token_format: "access_token"
+          create_credentials_file: true
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v3'
+        with:
+          version: '>= 363.0.0'
+      - name: Generate SSH key pair
+        run: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C ${{ github.actor }}
+      - name: Deploy application
+        run: |
+          gcloud compute ssh ${{ github.actor }}@${{ secrets.INSTANCE_NAME }} \
+            --ssh-key-file=~/.ssh/id_ed25519 --zone=${{ secrets.INSTANCE_ZONE_NAME }} \
+            --command="sudo bash /opt/devops/scripts/deploy.sh deploy ${{ github.event.pull_request.number }}"
+      - name: Cleanup SSH Keys
+        run: |
+          gcloud compute project-info describe --format=json | jq -r '.commonInstanceMetadata.items[] | select(.key == "ssh-keys") | .value ' | grep -v "${{ github.actor }}:$(cat ~/.ssh/id_ed25519.pub)" > ./ssh-keys.txt
+          gcloud compute project-info add-metadata --metadata-from-file=ssh-keys=./ssh-keys.txt
+          rm -rf ./ssh-keys.txt
+
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Cleanup Preview Deployment
+    steps:
+      - name: Authenticate to GCP using WIF
+        uses: google-github-actions/auth@v3
+        id: google-wif-auth
+        with:
+          token_format: "access_token"
+          create_credentials_file: true
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v3'
+        with:
+          version: '>= 363.0.0'
+      - name: Generate SSH key pair
+        run: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C ${{ github.actor }}
+      - name: Deploy application
+        run: |
+          gcloud compute ssh ${{ github.actor }}@${{ secrets.INSTANCE_NAME }} \
+            --ssh-key-file=~/.ssh/id_ed25519 --zone=${{ secrets.INSTANCE_ZONE_NAME }} \
+            --command="sudo bash /opt/devops/scripts/deploy.sh cleanup ${{ github.event.pull_request.number }}"
+      - name: Cleanup SSH Keys
+        run: |
+          gcloud compute project-info describe --format=json | jq -r '.commonInstanceMetadata.items[] | select(.key == "ssh-keys") | .value ' | grep -v "${{ github.actor }}:$(cat ~/.ssh/id_ed25519.pub)" > ./ssh-keys.txt
+          gcloud compute project-info add-metadata --metadata-from-file=ssh-keys=./ssh-keys.txt
+          rm -rf ./ssh-keys.txt
+      - name: Delete Docker Image
+        run: |
+          gcloud artifacts docker images delete --quiet \
+            ${{ vars.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.ARTIFACT_REGISTRY_NAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} 

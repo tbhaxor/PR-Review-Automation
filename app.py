@@ -2,6 +2,7 @@ from flask import Flask, request
 from flask_sitemap import Sitemap
 
 app = Flask(__name__)
+app.config['SITEMAP_INCLUDE_RULES_WITHOUT_PARAMS'] = True
 ext = Sitemap(app)
 
 @app.get("/")
